@@ -31,7 +31,12 @@
 
 *GATE: Must pass before Phase 0 research. Re-check after Phase 1 design.*
 
-[Gates determined based on constitution file]
+- Library-First: Plan must specify implementation as standalone library first
+- TDD: Plan must include TDD approach with red-green-refactor cycle
+- Functional Programming: Plan must prefer functional patterns, immutability, and pure functions
+- Security-First: Plan must prioritize security, include input validation, threat modeling
+- Microservices: Plan must use microservices architecture with independent services
+- Documentation: Plan must ensure full documentation of code and APIs
 
 ## Project Structure
 

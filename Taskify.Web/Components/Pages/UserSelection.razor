@@ -1,0 +1,70 @@
+@page "/"
+@rendermode InteractiveServer
+@inject TaskifyApiClient Api
+@inject UserSession Session
+@inject NavigationManager Navigation
+
+<PageTitle>Taskify</PageTitle>
+
+<section class="taskify-shell">
+    <div class="taskify-header">
+        <div>
+            <p class="eyebrow">Taskify</p>
+            <h1>Select a user</h1>
+        </div>
+        <p class="muted">Pick one of the predefined teammates to enter the workspace.</p>
+    </div>
+
+    @if (!string.IsNullOrWhiteSpace(error))
+    {
+        <div class="alert alert-danger" role="alert">@error</div>
+    }
+    else if (users is null)
+    {
+        <div class="loading">Loading users...</div>
+    }
+    else
+    {
+        <div class="user-grid">
+            @foreach (var user in users)
+            {
+                <button class="user-card" type="button" @onclick="() => SelectUser(user)">
+                    <span class="avatar">@Initials(user.Name)</span>
+                    <span>
+                        <strong>@user.Name</strong>
+                        <small>@user.Role</small>
+                    </span>
+                </button>
+            }
+        </div>
+    }
+</section>
+
+@code {
+    private IReadOnlyList<UserDto>? users;
+    private string? error;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            users = await Api.GetUsersAsync();
+        }
+        catch (Exception ex)
+        {
+            error = $"Unable to load users: {ex.Message}";
+        }
+    }
+
+    private void SelectUser(UserDto user)
+    {
+        Session.Select(user);
+        Navigation.NavigateTo($"/projects/{user.Id}");
+    }
+
+    private static string Initials(string name)
+    {
+        var parts = name.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        return string.Concat(parts.Take(2).Select(part => part[0])).ToUpperInvariant();
+    }
+}

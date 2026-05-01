@@ -1,0 +1,213 @@
+@page "/projects/{UserId:int}/kanban/{ProjectId:int}"
+@rendermode InteractiveServer
+@inject TaskifyApiClient Api
+@inject NavigationManager Navigation
+@implements IAsyncDisposable
+
+<PageTitle>Kanban - Taskify</PageTitle>
+
+<section class="taskify-shell">
+    <div class="taskify-header">
+        <div>
+            <p class="eyebrow">Kanban</p>
+            <h1>@(project?.Name ?? "Project board")</h1>
+        </div>
+        <button class="btn btn-outline-secondary" type="button" @onclick="BackToProjects">Projects</button>
+    </div>
+
+    @if (!string.IsNullOrWhiteSpace(error))
+    {
+        <div class="alert alert-danger" role="alert">@error</div>
+    }
+
+    @if (project is null || tasks is null || users is null)
+    {
+        <div class="loading">Loading board...</div>
+    }
+    else
+    {
+        <div class="task-create">
+            <input class="form-control" placeholder="Task title" maxlength="300" @bind="newTaskTitle" />
+            <input class="form-control" placeholder="Description" maxlength="2000" @bind="newTaskDescription" />
+            <select class="form-select" @bind="newTaskAssigneeId">
+                <option value="">Unassigned</option>
+                @foreach (var member in project.TeamMembers)
+                {
+                    <option value="@member.Id">@member.Name</option>
+                }
+            </select>
+            <button class="btn btn-primary" type="button" @onclick="CreateTask">Add task</button>
+        </div>
+
+        <div class="kanban-board">
+            @foreach (var status in Statuses)
+            {
+                <section class="kanban-column"
+                         @ondrop="() => DropOnStatus(status)"
+                         @ondragover:preventDefault="true">
+                    <header>
+                        <h2>@status</h2>
+                        <span>@TasksFor(status).Count()</span>
+                    </header>
+                    <div class="task-stack">
+                        @foreach (var task in TasksFor(status))
+                        {
+                            <TaskCard Task="task"
+                                      CurrentUserId="UserId"
+                                      DragStarted="SetDraggedTask"
+                                      Changed="LoadBoard" />
+                        }
+                    </div>
+                </section>
+            }
+        </div>
+    }
+</section>
+
+@code {
+    [Parameter] public int UserId { get; set; }
+    [Parameter] public int ProjectId { get; set; }
+
+    private static readonly string[] Statuses = ["To Do", "In Progress", "In Review", "Done"];
+    private IReadOnlyList<UserDto>? users;
+    private ProjectDto? project;
+    private IReadOnlyList<TaskDto>? tasks;
+    private HubConnection? hubConnection;
+    private int? draggedTaskId;
+    private string? newTaskTitle;
+    private string? newTaskDescription;
+    private int? newTaskAssigneeId;
+    private string? error;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadBoard();
+        await StartNotifications();
+    }
+
+    private async Task LoadBoard()
+    {
+        try
+        {
+            error = null;
+            users = await Api.GetUsersAsync();
+            project = await Api.GetProjectAsync(ProjectId);
+            tasks = await Api.GetTasksAsync(ProjectId);
+        }
+        catch (Exception ex)
+        {
+            error = $"Unable to load board: {ex.Message}";
+        }
+    }
+
+    private IEnumerable<TaskDto> TasksFor(string status) =>
+        (tasks ?? [])
+            .Where(task => task.Status == status)
+            .OrderByDescending(task => task.Assignee?.Id == UserId)
+            .ThenBy(task => task.Title);
+
+    private async Task CreateTask()
+    {
+        if (string.IsNullOrWhiteSpace(newTaskTitle))
+        {
+            error = "Task title is required.";
+            return;
+        }
+
+        try
+        {
+            error = null;
+            await Api.CreateTaskAsync(new CreateTaskRequest(
+                ProjectId,
+                newTaskTitle,
+                newTaskDescription,
+                newTaskAssigneeId,
+                "To Do",
+                "Medium",
+                null));
+
+            newTaskTitle = null;
+            newTaskDescription = null;
+            newTaskAssigneeId = null;
+            await LoadBoard();
+        }
+        catch (Exception ex)
+        {
+            error = $"Unable to create task: {ex.Message}";
+        }
+    }
+
+    private Task SetDraggedTask(int taskId)
+    {
+        draggedTaskId = taskId;
+        return Task.CompletedTask;
+    }
+
+    private async Task DropOnStatus(string status)
+    {
+        if (draggedTaskId is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await Api.UpdateStatusAsync(draggedTaskId.Value, status);
+            draggedTaskId = null;
+            await LoadBoard();
+        }
+        catch (Exception ex)
+        {
+            error = $"Unable to move task: {ex.Message}";
+        }
+    }
+
+    private void BackToProjects() => Navigation.NavigateTo($"/projects/{UserId}");
+
+    private async Task StartNotifications()
+    {
+        hubConnection = new HubConnectionBuilder()
+            .WithUrl("http://localhost:5001/notifications")
+            .WithAutomaticReconnect()
+            .Build();
+
+        hubConnection.On<TaskDto>("TaskCreated", _ => RefreshFromNotification());
+        hubConnection.On<TaskDto>("TaskUpdated", _ => RefreshFromNotification());
+        hubConnection.On<object>("TaskDeleted", _ => RefreshFromNotification());
+        hubConnection.On<CommentDto>("CommentAdded", _ => RefreshFromNotification());
+        hubConnection.On<CommentDto>("CommentUpdated", _ => RefreshFromNotification());
+        hubConnection.On<object>("CommentDeleted", _ => RefreshFromNotification());
+
+        try
+        {
+            await hubConnection.StartAsync();
+            await hubConnection.InvokeAsync("JoinProject", ProjectId.ToString());
+        }
+        catch (Exception ex)
+        {
+            error = $"Live updates are unavailable: {ex.Message}";
+        }
+    }
+
+    private async Task RefreshFromNotification()
+    {
+        await InvokeAsync(async () =>
+        {
+            await LoadBoard();
+            StateHasChanged();
+        });
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (hubConnection is not null)
+        {
+            if (hubConnection.State == HubConnectionState.Connected)
+            {
+                await hubConnection.InvokeAsync("LeaveProject", ProjectId.ToString());
+            }
+
+            await hubConnection.DisposeAsync();
+        }
+    }
+}

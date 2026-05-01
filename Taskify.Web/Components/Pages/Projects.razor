@@ -1,0 +1,189 @@
+@page "/projects/{UserId:int}"
+@rendermode InteractiveServer
+@inject TaskifyApiClient Api
+@inject UserSession Session
+@inject NavigationManager Navigation
+
+<PageTitle>Projects - Taskify</PageTitle>
+
+<section class="taskify-shell">
+    <div class="taskify-header">
+        <div>
+            <p class="eyebrow">Projects</p>
+            <h1>Workspace</h1>
+        </div>
+        <button class="btn btn-outline-secondary" type="button" @onclick="ChangeUser">Change user</button>
+    </div>
+
+    @if (currentUser is not null)
+    {
+        <div class="current-user">
+            <span class="avatar small">@Initials(currentUser.Name)</span>
+            <span>@currentUser.Name</span>
+            <small>@currentUser.Role</small>
+        </div>
+    }
+
+    @if (!string.IsNullOrWhiteSpace(error))
+    {
+        <div class="alert alert-danger" role="alert">@error</div>
+    }
+
+    <div class="project-create">
+        <input class="form-control" placeholder="Project name" maxlength="200" @bind="newProjectName" />
+        <input class="form-control" placeholder="Description" maxlength="1000" @bind="newProjectDescription" />
+        <button class="btn btn-primary" type="button" @onclick="CreateProject" disabled="@isSaving">Create</button>
+    </div>
+
+    @if (projects is null)
+    {
+        <div class="loading">Loading projects...</div>
+    }
+    else
+    {
+        <div class="project-grid">
+            @foreach (var project in projects)
+            {
+                <article class="project-card">
+                    <button class="project-open" type="button" @onclick="() => OpenProject(project.Id)">
+                        <strong>@project.Name</strong>
+                        <span>@project.Description</span>
+                    </button>
+
+                    <div class="member-list" aria-label="@($"{project.Name} team members")">
+                        @foreach (var member in project.TeamMembers)
+                        {
+                            <span class="member-pill">@member.Name <small>@member.Role</small></span>
+                        }
+                    </div>
+
+                    <div class="member-actions">
+                        <select class="form-select" @bind="selectedUsers[project.Id]">
+                            <option value="0">Add teammate</option>
+                            @foreach (var user in AvailableUsers(project))
+                            {
+                                <option value="@user.Id">@user.Name</option>
+                            }
+                        </select>
+                        <button class="btn btn-sm btn-outline-primary" type="button" @onclick="() => AddMember(project.Id)">Add</button>
+                    </div>
+                </article>
+            }
+        </div>
+    }
+</section>
+
+@code {
+    [Parameter] public int UserId { get; set; }
+
+    private UserDto? currentUser;
+    private IReadOnlyList<UserDto> users = [];
+    private IReadOnlyList<ProjectDto>? projects;
+    private readonly Dictionary<int, int> selectedUsers = [];
+    private string? newProjectName;
+    private string? newProjectDescription;
+    private string? error;
+    private bool isSaving;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await Load();
+    }
+
+    private async Task Load()
+    {
+        try
+        {
+            users = await Api.GetUsersAsync();
+            currentUser = users.FirstOrDefault(user => user.Id == UserId);
+            if (currentUser is not null)
+            {
+                Session.Select(currentUser);
+            }
+
+            projects = await Api.GetProjectsAsync();
+            EnsureProjectSelections();
+        }
+        catch (Exception ex)
+        {
+            error = $"Unable to load projects: {ex.Message}";
+        }
+    }
+
+    private async Task CreateProject()
+    {
+        if (currentUser is null || string.IsNullOrWhiteSpace(newProjectName))
+        {
+            error = "Select a user and enter a project name.";
+            return;
+        }
+
+        try
+        {
+            isSaving = true;
+            error = null;
+            await Api.CreateProjectAsync(new CreateProjectRequest(newProjectName, newProjectDescription, currentUser.Id));
+            newProjectName = null;
+            newProjectDescription = null;
+            projects = await Api.GetProjectsAsync();
+            EnsureProjectSelections();
+        }
+        catch (Exception ex)
+        {
+            error = $"Unable to create project: {ex.Message}";
+        }
+        finally
+        {
+            isSaving = false;
+        }
+    }
+
+    private async Task AddMember(int projectId)
+    {
+        var userId = selectedUsers.GetValueOrDefault(projectId);
+        if (userId == 0)
+        {
+            return;
+        }
+
+        try
+        {
+            error = null;
+            await Api.AddMemberAsync(projectId, userId);
+            selectedUsers[projectId] = 0;
+            projects = await Api.GetProjectsAsync();
+            EnsureProjectSelections();
+        }
+        catch (Exception ex)
+        {
+            error = $"Unable to add member: {ex.Message}";
+        }
+    }
+
+    private IEnumerable<UserDto> AvailableUsers(ProjectDto project) =>
+        users.Where(user => project.TeamMembers.All(member => member.Id != user.Id));
+
+    private void EnsureProjectSelections()
+    {
+        if (projects is null)
+        {
+            return;
+        }
+
+        foreach (var project in projects)
+        {
+            selectedUsers.TryAdd(project.Id, 0);
+        }
+    }
+
+    private void OpenProject(int projectId) =>
+        Navigation.NavigateTo($"/projects/{UserId}/kanban/{projectId}");
+
+    private void ChangeUser() => Navigation.NavigateTo("/");
+
+    private static string Initials(string name)
+    {
+        var parts = name.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        return string.Concat(parts.Take(2).Select(part => part[0])).ToUpperInvariant();
+    }
+}

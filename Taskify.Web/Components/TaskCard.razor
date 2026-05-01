@@ -1,0 +1,113 @@
+@inject TaskifyApiClient Api
+
+<article class="task-card @(IsMine ? "mine" : null)" draggable="true" @ondragstart="OnDragStart">
+    <header>
+        <strong>@Task.Title</strong>
+        <span class="priority">@Task.Priority</span>
+    </header>
+    @if (!string.IsNullOrWhiteSpace(Task.Description))
+    {
+        <p>@Task.Description</p>
+    }
+    <div class="task-meta">
+        <span>@(Task.Assignee?.Name ?? "Unassigned")</span>
+        @if (Task.DueDate is not null)
+        {
+            <span>@Task.DueDate.Value.ToShortDateString()</span>
+        }
+    </div>
+
+    <details class="comments">
+        <summary>@Task.Comments.Count comment@(Task.Comments.Count == 1 ? string.Empty : "s")</summary>
+        @foreach (var comment in Task.Comments)
+        {
+            <div class="comment">
+                <div>
+                    <strong>@comment.Author.Name</strong>
+                    <small>@comment.CreatedAt.ToLocalTime().ToString("g")</small>
+                </div>
+                @if (editingCommentId == comment.Id)
+                {
+                    <textarea class="form-control form-control-sm" maxlength="1000" @bind="editingText"></textarea>
+                    <div class="inline-actions">
+                        <button class="btn btn-sm btn-primary" type="button" @onclick="() => SaveComment(comment.Id)">Save</button>
+                        <button class="btn btn-sm btn-outline-secondary" type="button" @onclick="CancelEdit">Cancel</button>
+                    </div>
+                }
+                else
+                {
+                    <p>@comment.Content</p>
+                    @if (CurrentUserId == comment.Author.Id)
+                    {
+                        <div class="inline-actions">
+                            <button class="btn btn-sm btn-outline-primary" type="button" @onclick="() => StartEdit(comment)">Edit</button>
+                            <button class="btn btn-sm btn-outline-danger" type="button" @onclick="() => DeleteComment(comment.Id)">Delete</button>
+                        </div>
+                    }
+                }
+            </div>
+        }
+
+        <div class="comment-composer">
+            <textarea class="form-control form-control-sm" maxlength="1000" placeholder="Add comment" @bind="newComment"></textarea>
+            <button class="btn btn-sm btn-outline-primary" type="button" @onclick="AddComment">Comment</button>
+        </div>
+    </details>
+</article>
+
+@code {
+    [Parameter, EditorRequired] public TaskDto Task { get; set; } = null!;
+    [Parameter, EditorRequired] public int CurrentUserId { get; set; }
+    [Parameter] public EventCallback<int> DragStarted { get; set; }
+    [Parameter] public EventCallback Changed { get; set; }
+
+    private string? newComment;
+    private int? editingCommentId;
+    private string? editingText;
+
+    private bool IsMine => Task.Assignee?.Id == CurrentUserId;
+
+    private Task OnDragStart() => DragStarted.InvokeAsync(Task.Id);
+
+    private async Task AddComment()
+    {
+        if (string.IsNullOrWhiteSpace(newComment))
+        {
+            return;
+        }
+
+        await Api.AddCommentAsync(Task.Id, CurrentUserId, newComment);
+        newComment = null;
+        await Changed.InvokeAsync();
+    }
+
+    private void StartEdit(CommentDto comment)
+    {
+        editingCommentId = comment.Id;
+        editingText = comment.Content;
+    }
+
+    private void CancelEdit()
+    {
+        editingCommentId = null;
+        editingText = null;
+    }
+
+    private async Task SaveComment(int commentId)
+    {
+        if (string.IsNullOrWhiteSpace(editingText))
+        {
+            return;
+        }
+
+        await Api.UpdateCommentAsync(Task.Id, commentId, CurrentUserId, editingText);
+        CancelEdit();
+        await Changed.InvokeAsync();
+    }
+
+    private async Task DeleteComment(int commentId)
+    {
+        await Api.DeleteCommentAsync(Task.Id, commentId, CurrentUserId);
+        await Changed.InvokeAsync();
+    }
+}
